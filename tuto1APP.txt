@@ -1,0 +1,7 @@
+CRC16, prendre code C en ligne
+Bits dans l application, conversion manchester pour tranmission
+Manchester a le double de l information cost un bit represente un shift high low or low high
+on se sync avec le preambule pour le baud rate
+Type + flags = on peut mettre n importe quoi pour gerer le protocole. On peut utiliser 1,2,3,4 pour start,ok,data,end, 
+ajouter flags pour charactere au lieu de number? Utiliser unsigned int au lieu de char et interpreter apres...
+Vitesse maximale, theorique et tester pratique, depend de notre protocole etc...
