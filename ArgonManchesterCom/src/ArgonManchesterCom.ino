@@ -13,8 +13,8 @@ enum ThreadState{
 Thread* rThread;
 unsigned int LoopbackOut = D4;
 unsigned int LoopbackIn = D5;
-int outBaudRate = 1;
-int inBaudRate = 1;
+int outBaudRate = (int)(1000/100); // Symbol / s
+int inBaudRate = (int)(1000/100); // Symbol / s
 
 volatile ThreadState receiverThreadState = ThreadState::IDLE;
 
@@ -26,30 +26,41 @@ void send(String s){
     char c = s.charAt(i);
     if(c == '0'){
       digitalWrite(LoopbackOut,0);
-      Serial.println("Send : 0");
     } else {
       digitalWrite(LoopbackOut,1);
-      Serial.println("Send : 1");
     }
-    delay(1000/outBaudRate); // Since we're using Manchester protocol , we have to send the bits twice
+    delay(outBaudRate); // Since we're using Manchester protocol , we have to send the bits twice
     if(c == '0'){
-      Serial.println("Send : 1");
       digitalWrite(LoopbackOut,1);
     } else {
-      Serial.println("Send : 0");
       digitalWrite(LoopbackOut,0);
     }
-    delay(1000/outBaudRate);
+    delay(outBaudRate);
   }
 }
 
-void sendMessage(){
+void sendMessage(String s){
+  WITH_LOCK(Serial)
+  {
+    Serial.println("BEGIN SENDING");
+  }
   // Send preambule
   send("01010101");
   // Send start
+  send("01111110");
   // Send header
+  send("00000000"); // FLAGS
+  send("00000100"); // LENGTH
+  // Send message
+  send("01000001"); // A
+  send("01001100"); // L
+  send("01001100"); // L
+  send("01001111"); // O
   // Send CRC16
+  send("1010101010101010");
   // Send End
+  send("01111110");
+  delay(outBaudRate*500);
 }
 
 void setup() {
@@ -58,63 +69,134 @@ void setup() {
   pinMode(LoopbackOut,OUTPUT);
   pinMode(LoopbackIn,INPUT);
   digitalWrite(LoopbackOut,1); // Keep the pin high until the transmission begins
+  delay(2000);
   rThread = new Thread("receiverThread", receiverThread); // Start the receiverThread
+  delay(outBaudRate*300);
+  sendMessage("ALLO");
 }
 
-int counter = 0;
 void loop() {
-  if(counter == 5){
-    Serial.println("BEGIN SENDING");
-    sendMessage();
-  }
-  counter++;
-  delay(100);
+  delay(outBaudRate);
 }
 
 volatile unsigned int previousBitReceived = 1;
 volatile unsigned int newBitReceived = 0;
+volatile int DataLength = 0;
+
+template<class T>
+void readBytes(T* B,size_t amount){
+  for(size_t i = 0; i < 8*amount;i++){
+    unsigned int newBitReceived_1 = digitalRead(LoopbackIn);
+    delay(inBaudRate);
+    unsigned int newBitReceived_2 = digitalRead(LoopbackIn);
+    delay(inBaudRate);
+    if(newBitReceived_1 == 0 && newBitReceived_2 == 1){
+      *B = *B | (0 << (((8*amount)-1)-i));
+    } else {
+      *B = *B | (1 << (((8*amount)-1)-i));
+    }
+  }
+}
+
 void receiverThread(void){
   while(true) {
     switch(receiverThreadState)
     {
       case IDLE:
+      {
         newBitReceived = digitalRead(LoopbackIn);
         if(previousBitReceived == 1 && newBitReceived == 0){ // Someone is trying to communicate
           if(inBaudRate == -1){ // Try to figure out the baud rate by indentifying the preambule
             receiverThreadState = ThreadState::INITIATING_CONNECT;
           } else {
-            receiverThreadState = ThreadState::RECEIVING_PREAMBULE;
+            receiverThreadState = ThreadState::RECEIVING_PREAMBULE; // Immideately jump to Preambule
             previousBitReceived = newBitReceived;
+            break;
           }
         }
         previousBitReceived = newBitReceived;
+        delay(inBaudRate);
         break;
+      }
       case INITIATING_CONNECT:
+      {
         //newBitReceived = digitalRead(LoopbackIn);
         break;
+      }
       case RECEIVING_PREAMBULE:
-        digitalRead(LoopbackIn);
-        delay(1000/inBaudRate);
-        uint8_t preambule[8] = {0};
-        for(int i = 1; i < 8;i++){ // We start at 1 because we already got the 0 from the start of tranmission
-          unsigned int newBitReceived_1 = digitalRead(LoopbackIn);
-          delay(1000/inBaudRate);
-          unsigned int newBitReceived_2 = digitalRead(LoopbackIn);
-          delay(1000/inBaudRate);
-          if(newBitReceived_1 == 0 && newBitReceived_2 == 1){
-            preambule[i] == 0;
-          } else {
-            preambule[i] == 1;
+      {
+        uint8_t premabuleBits = 0;
+        readBytes(&premabuleBits,1); // Read the next 8 bits to see if it matches the preambule
+        WITH_LOCK(Serial)
+        {
+          Serial.printlnf("Preambule : %X,  should be : %X",premabuleBits,premabuleBits);
+        }
+        receiverThreadState = ThreadState::RECEIVING_START;
+        break;
+      }
+      case RECEIVING_START:
+      {
+        uint8_t startBits = 0;
+        readBytes(&startBits,1); // Read the next 8 bits to see if it matches the start
+        WITH_LOCK(Serial)
+        {
+          Serial.printlnf("Start : %X,  should be : %X",startBits,startBits);
+        }
+        receiverThreadState = ThreadState::RECEIVING_HEADER;
+        break;
+      }
+      case RECEIVING_HEADER:
+      {
+        uint8_t TypeFlagBits = 0;
+        uint8_t MessageLength = 0;
+        readBytes(&TypeFlagBits,1);
+        readBytes(&MessageLength,1);
+        DataLength = MessageLength;
+        WITH_LOCK(Serial)
+        {
+          Serial.printlnf("TypeFlag : %X",TypeFlagBits);
+          Serial.printlnf("Length : %d",MessageLength);
+        }
+        receiverThreadState = ThreadState::RECEIVING_DATA;
+        break;
+      }
+      case RECEIVING_DATA:
+      { 
+        uint8_t* arr = new uint8_t[DataLength]{0};
+        for(int i = 0; i < DataLength;i++){
+          readBytes(&arr[i],1);
+        }
+        WITH_LOCK(Serial)
+        {
+          Serial.print("Message : ");
+          for(int i = 0; i < DataLength;i++){
+              Serial.printf("%c",arr[i]);
           }
+          Serial.println();
         }
-        Serial.print("Received : ");
-        for(int i = 0; i < 8;i++){
-          Serial.print(preambule[i]);
+      }
+      case RECEIVING_CRC:
+      {
+        uint16_t CRCBits = 0;
+        readBytes(&CRCBits,2);
+        WITH_LOCK(Serial)
+        {
+          Serial.printlnf("CRC : %X,  should be : %X",CRCBits,CRCBits);
         }
-        Serial.println();
+        receiverThreadState = ThreadState::RECEIVING_END;
+        break;
+      }
+      case RECEIVING_END:
+      {
+        uint8_t EndBits = 0;
+        readBytes(&EndBits,1);
+        WITH_LOCK(Serial)
+        {
+          Serial.printlnf("END : %X,  should be : %X\n",EndBits,EndBits);
+        }
         receiverThreadState = ThreadState::IDLE;
         break;
+      }
     }
-    delay(1000/inBaudRate);
   }
 }
