@@ -129,7 +129,7 @@ void receiverThread(void){
         readBytes(&premabuleBits,1); // Read the next 8 bits to see if it matches the preambule
         WITH_LOCK(Serial)
         {
-          Serial.printlnf("Preambule : %X,  should be : %X",premabuleBits,premabuleBits);
+          Serial.printlnf("Preambule : %X,  should be : %X",premabuleBits,0x55);
         }
         receiverThreadState = ThreadState::RECEIVING_START;
         break;
@@ -140,7 +140,7 @@ void receiverThread(void){
         readBytes(&startBits,1); // Read the next 8 bits to see if it matches the start
         WITH_LOCK(Serial)
         {
-          Serial.printlnf("Start : %X,  should be : %X",startBits,startBits);
+          Serial.printlnf("Start : %X,  should be : %X",startBits,0X7E);
         }
         receiverThreadState = ThreadState::RECEIVING_HEADER;
         break;
@@ -181,7 +181,7 @@ void receiverThread(void){
         readBytes(&CRCBits,2);
         WITH_LOCK(Serial)
         {
-          Serial.printlnf("CRC : %X,  should be : %X",CRCBits,CRCBits);
+          Serial.printlnf("CRC : %X,  should be : %X",CRCBits,0xFFFF);
         }
         receiverThreadState = ThreadState::RECEIVING_END;
         break;
@@ -192,7 +192,7 @@ void receiverThread(void){
         readBytes(&EndBits,1);
         WITH_LOCK(Serial)
         {
-          Serial.printlnf("END : %X,  should be : %X\n",EndBits,EndBits);
+          Serial.printlnf("END : %X,  should be : %X\n",EndBits,0xFE);
         }
         receiverThreadState = ThreadState::IDLE;
         break;
