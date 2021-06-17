@@ -12,10 +12,11 @@ enum ThreadState{
   RECEIVING_PREAMBULE,RECEIVING_START,RECEIVING_HEADER,RECEIVING_DATA,RECEIVING_CRC,RECEIVING_END,
 };
 Thread* rThread;
+Thread* tThread;
 unsigned int LoopbackOut = D4;
 unsigned int LoopbackIn = D5;
-int outBaudRate = (int)(1000/100); // Symbol / s
-int inBaudRate = (int)(1000/100); // Symbol / s
+int outBaudRate = (int)(1000/1000); // Symbol / s
+int inBaudRate = (int)(1000/1000); // Symbol / s
 
 volatile ThreadState receiverThreadState = ThreadState::IDLE;
 
@@ -60,7 +61,6 @@ void sendMessage(String s){
   sendBytes((uint16_t)(0xFFFF),2);
   // Send End
   sendBytes((uint8_t)(0x7E),1);
-  delay(outBaudRate*500);
 }
 
 void setup() {
@@ -71,13 +71,19 @@ void setup() {
   digitalWrite(LoopbackOut,1); // Keep the pin high until the transmission begins
   delay(2000);
   rThread = new Thread("receiverThread", receiverThread); // Start the receiverThread
-  delay(outBaudRate*300);
-  sendMessage("Allo");
+  tThread = new Thread("transmitterThread", transmitterThread);
 }
 
 void loop() {
-  delay(outBaudRate);
 }
+
+void transmitterThread(void){
+  while(true){
+    sendMessage("NNNNNNNNNNNNNNNNNNNNNNNNNNNB");
+    delay(10000);
+  }
+}
+
 
 volatile unsigned int previousBitReceived = 1;
 volatile unsigned int newBitReceived = 0;
@@ -115,7 +121,7 @@ void receiverThread(void){
           }
         }
         previousBitReceived = newBitReceived;
-        delay(inBaudRate);
+        delayMicroseconds(100);
         break;
       }
       case INITIATING_CONNECT:
@@ -192,7 +198,7 @@ void receiverThread(void){
         readBytes(&EndBits,1);
         WITH_LOCK(Serial)
         {
-          Serial.printlnf("END : %X,  should be : %X\n",EndBits,0xFE);
+          Serial.printlnf("END : %X,  should be : %X\n",EndBits,0x7E);
         }
         receiverThreadState = ThreadState::IDLE;
         break;
