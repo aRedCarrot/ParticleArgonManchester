@@ -1,5 +1,6 @@
 // BELJ2434
 #include "Particle.h"
+#include "math.h"
 SYSTEM_THREAD(ENABLED);
 // IDLE : Waiting for message
 // INITIATING_CONNECT : Attempting to figure out the baud rate
@@ -18,19 +19,18 @@ int inBaudRate = (int)(1000/100); // Symbol / s
 
 volatile ThreadState receiverThreadState = ThreadState::IDLE;
 
-void send(String s){
-  // Manchester
-  // 0 : low to high
-  // 1 : high to low
-  for(unsigned int i = 0; i < s.length();i++){
-    char c = s.charAt(i);
-    if(c == '0'){
+template<class T>
+void sendBytes(T B, size_t amount) {
+  char bit = 0;
+  for (size_t i = 0; i < 8 * amount; i++) {
+    T bit = (B >> ((8*amount)-i-1)) & 1;
+    if(bit == 0){
       digitalWrite(LoopbackOut,0);
     } else {
       digitalWrite(LoopbackOut,1);
     }
     delay(outBaudRate); // Since we're using Manchester protocol , we have to send the bits twice
-    if(c == '0'){
+    if(bit == 0){
       digitalWrite(LoopbackOut,1);
     } else {
       digitalWrite(LoopbackOut,0);
@@ -45,21 +45,21 @@ void sendMessage(String s){
     Serial.println("BEGIN SENDING");
   }
   // Send preambule
-  send("01010101");
+  sendBytes((uint8_t)(0x55),1);
   // Send start
-  send("01111110");
+  sendBytes((uint8_t)(0x7E),1);
   // Send header
-  send("00000000"); // FLAGS
-  send("00000100"); // LENGTH
+  sendBytes((uint8_t)(0x00),1); // Flags
+  sendBytes((uint8_t)(s.length()),1); // Length
   // Send message
-  send("01000001"); // A
-  send("01001100"); // L
-  send("01001100"); // L
-  send("01001111"); // O
+  for(size_t i = 0; i < s.length();i++){
+    char c = s.charAt(i);
+    sendBytes(c,1);
+  }
   // Send CRC16
-  send("1010101010101010");
+  sendBytes((uint16_t)(0xFFFF),2);
   // Send End
-  send("01111110");
+  sendBytes((uint8_t)(0x7E),1);
   delay(outBaudRate*500);
 }
 
@@ -72,7 +72,7 @@ void setup() {
   delay(2000);
   rThread = new Thread("receiverThread", receiverThread); // Start the receiverThread
   delay(outBaudRate*300);
-  sendMessage("ALLO");
+  sendMessage("Allo");
 }
 
 void loop() {
