@@ -6,19 +6,22 @@ SYSTEM_THREAD(ENABLED);
 // INITIATING_CONNECT : Attempting to figure out the baud rate
 // SENDING : Sending bits on the line
 // RECEIVING : Receiving bits on the line
+int bit_rates[3] = {1, 10, 100};  //Number represents the delay between each bits
+int rate_index = 0; //Index of previous table
 enum ThreadState{
-  IDLE,INITIATING_CONNECT,
-  SENDING_PREAMBULE,SENDING_START,SENDING_HEADER,SENDING_DATA,SENDING_CRC,SENDING_END,
+  IDLE,INITIATING_CONNECT, WAITING_FOR_REPLY, CONNECTED,
   RECEIVING_PREAMBULE,RECEIVING_START,RECEIVING_HEADER,RECEIVING_DATA,RECEIVING_CRC,RECEIVING_END,
 };
 Thread* rThread;
 Thread* tThread;
 unsigned int LoopbackOut = D4;
 unsigned int LoopbackIn = D5;
-int outBaudRate = (int)(1000/1000); // Symbol / s
-int inBaudRate = (int)(1000/1000); // Symbol / s
+int outBaudRate = bit_rates[rate_index]; // Symbol / s
+int inBaudRate = -1; // Symbol / s
 
 volatile ThreadState receiverThreadState = ThreadState::IDLE;
+volatile ThreadState transmitterThreadState = ThreadState::INITIATING_CONNECT;
+volatile bool m_connected = false;
 
 template<class T>
 void sendBytes(T B, size_t amount) {
@@ -40,11 +43,12 @@ void sendBytes(T B, size_t amount) {
   }
 }
 
+uint16_t getCRC(String s){
+  return 0xFFFF;
+}
+
 void sendMessage(String s){
-  WITH_LOCK(Serial)
-  {
-    Serial.println("BEGIN SENDING");
-  }
+  uint16_t CRC16 = getCRC(s);
   // Send preambule
   sendBytes((uint8_t)(0x55),1);
   // Send start
@@ -58,7 +62,7 @@ void sendMessage(String s){
     sendBytes(c,1);
   }
   // Send CRC16
-  sendBytes((uint16_t)(0xFFFF),2);
+  sendBytes(CRC16,2);
   // Send End
   sendBytes((uint8_t)(0x7E),1);
 }
@@ -71,6 +75,7 @@ void setup() {
   digitalWrite(LoopbackOut,1); // Keep the pin high until the transmission begins
   delay(2000);
   rThread = new Thread("receiverThread", receiverThread); // Start the receiverThread
+  delay(1000);
   tThread = new Thread("transmitterThread", transmitterThread);
 }
 
@@ -79,8 +84,55 @@ void loop() {
 
 void transmitterThread(void){
   while(true){
-    sendMessage("NNNNNNNNNNNNNNNNNNNNNNNNNNNB");
-    delay(10000);
+    switch (transmitterThreadState)
+    {
+      case INITIATING_CONNECT:{
+        WITH_LOCK(Serial)
+        {
+          Serial.println("TRANSMITTER : INITIATING CONNECT");
+        }
+        outBaudRate = bit_rates[rate_index];
+        sendBytes((uint32_t)0x55555555, 4);
+        transmitterThreadState = ThreadState::WAITING_FOR_REPLY;
+        break;
+      }
+      case WAITING_FOR_REPLY:{
+        WITH_LOCK(Serial)
+        {
+          Serial.println("TRANSMITTER : WAITING FOR REPLY");
+        }
+        for (int i = 0; i < 500 && !m_connected; i++){
+          delay(outBaudRate);
+        }
+        if(m_connected){
+          WITH_LOCK(Serial)
+          {
+            Serial.printlnf("TRANSMITTER : CONNECTED AT %d bits/s", 1000/bit_rates[rate_index]);
+          }
+          transmitterThreadState = ThreadState::CONNECTED;
+        } else {
+          WITH_LOCK(Serial)
+          {
+            Serial.printlnf("TRANSMITTER : FAILED CONNECTING AT %d bits/s", 1000/bit_rates[rate_index]);
+          }
+          transmitterThreadState = ThreadState::INITIATING_CONNECT;
+          if (rate_index < 2){
+            rate_index++;
+          }
+        }
+        break;
+      }
+      case CONNECTED:{
+        WITH_LOCK(Serial)
+        {
+          Serial.println("TRANSMITTER : SENDING MESSAGE");
+        }
+        String msg = "NNNNNNNNNNNNNNNNNNNNNNNNNNNB";
+        sendMessage(msg);
+        delay((8 * 54 * bit_rates[rate_index]) + (8*msg.length() * bit_rates[rate_index]) + 1000); // Delay for each bits sent by frame + message + extra 1000 ms
+        break;
+      }
+    }
   }
 }
 
@@ -112,7 +164,7 @@ void receiverThread(void){
       {
         newBitReceived = digitalRead(LoopbackIn);
         if(previousBitReceived == 1 && newBitReceived == 0){ // Someone is trying to communicate
-          if(inBaudRate == -1){ // Try to figure out the baud rate by indentifying the preambule
+          if(!m_connected){ // Try to figure out the baud rate by indentifying the preambule
             receiverThreadState = ThreadState::INITIATING_CONNECT;
           } else {
             receiverThreadState = ThreadState::RECEIVING_PREAMBULE; // Immideately jump to Preambule
@@ -126,7 +178,17 @@ void receiverThread(void){
       }
       case INITIATING_CONNECT:
       {
-        //newBitReceived = digitalRead(LoopbackIn);
+        inBaudRate = bit_rates[rate_index];
+        uint32_t bytes_read = 0;
+        readBytes(&bytes_read, 4);
+        WITH_LOCK(Serial)
+        {
+          Serial.println("RECEIVER : INITIATING CONNECT");
+        }
+        if (bytes_read == (uint32_t)(0x55555555)){
+          m_connected = true;
+        }
+        receiverThreadState = ThreadState::IDLE;
         break;
       }
       case RECEIVING_PREAMBULE:
