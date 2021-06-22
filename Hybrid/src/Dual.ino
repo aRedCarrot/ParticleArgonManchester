@@ -6,7 +6,7 @@ SYSTEM_THREAD(ENABLED);
 // INITIATING_CONNECT : Attempting to figure out the baud rate
 // SENDING : Sending bits on the line
 // RECEIVING : Receiving bits on the line
-int bit_rates[3] = {1, 10, 100};  //Number represents the delay between each bits
+int bit_rates[3] = {10, 10, 100};  //Number represents the delay between each bits
 int rate_index = 0; //Index of previous table
 enum ThreadState{
   IDLE,INITIATING_CONNECT, WAITING_FOR_REPLY, CONNECTED,
@@ -14,14 +14,25 @@ enum ThreadState{
 };
 Thread* rThread;
 Thread* tThread;
-unsigned int LoopbackOut = D4;
-unsigned int LoopbackIn = D5;
+unsigned int PinIn = D4;
+unsigned int PinOut = D5;
 int outBaudRate = bit_rates[rate_index]; // Symbol / s
 int inBaudRate = -1; // Symbol / s
 
 volatile ThreadState receiverThreadState = ThreadState::IDLE;
 volatile ThreadState transmitterThreadState = ThreadState::INITIATING_CONNECT;
-volatile bool m_connected = false;
+
+uint16_t getCRC16(uint8_t* data_p, uint8_t length){
+    uint8_t x;
+    uint8_t crc = 0xFFFF;
+
+    while (length--){
+        x = crc >> 8 ^ *data_p++;
+        x ^= x>>4;
+        crc = (crc << 8) ^ ((uint8_t)(x << 12)) ^ ((uint8_t)(x <<5)) ^ ((uint8_t)x);
+    }
+    return crc;
+}
 
 template<class T>
 void sendBytes(T B, size_t amount) {
@@ -29,26 +40,26 @@ void sendBytes(T B, size_t amount) {
   for (size_t i = 0; i < 8 * amount; i++) {
     T bit = (B >> ((8*amount)-i-1)) & 1;
     if(bit == 0){
-      digitalWrite(LoopbackOut,0);
+      digitalWrite(PinOut,0);
     } else {
-      digitalWrite(LoopbackOut,1);
+      digitalWrite(PinOut,1);
     }
     delay(outBaudRate); // Since we're using Manchester protocol , we have to send the bits twice
     if(bit == 0){
-      digitalWrite(LoopbackOut,1);
+      digitalWrite(PinOut,1);
     } else {
-      digitalWrite(LoopbackOut,0);
+      digitalWrite(PinOut,0);
     }
     delay(outBaudRate);
   }
 }
 
-uint16_t getCRC(String s){
-  return 0xFFFF;
-}
-
 void sendMessage(String s){
-  uint16_t CRC16 = getCRC(s);
+  uint8_t* characters = new uint8_t[s.length()];
+  for(int i = 0; i < s.length();i++){
+    characters[i] = s.charAt(i);
+  }
+  uint16_t CRC16 = getCRC16(characters,s.length());
   // Send preambule
   sendBytes((uint8_t)(0x55),1);
   // Send start
@@ -70,9 +81,9 @@ void sendMessage(String s){
 void setup() {
   // Put initialization like pinMode and begin functions here.
   Serial.begin(9600);
-  pinMode(LoopbackOut,OUTPUT);
-  pinMode(LoopbackIn,INPUT);
-  digitalWrite(LoopbackOut,1); // Keep the pin high until the transmission begins
+  pinMode(PinOut,OUTPUT);
+  pinMode(PinIn,INPUT);
+  digitalWrite(PinOut,1); // Keep the pin high until the transmission begins
   delay(2000);
   rThread = new Thread("receiverThread", receiverThread); // Start the receiverThread
   delay(1000);
@@ -101,10 +112,16 @@ void transmitterThread(void){
         {
           Serial.println("TRANSMITTER : WAITING FOR REPLY");
         }
-        for (int i = 0; i < 500 && !m_connected; i++){
+        bool connected = false;
+        uint8_t currentValue = digitalRead(PinIn);
+        for (int i = 0; i < 5000 && !connected; i++){
+          if(digitalRead(PinIn) != currentValue){
+            connected = true;
+          }
           delay(outBaudRate);
         }
-        if(m_connected){
+        delay(3000);
+        if(connected){
           WITH_LOCK(Serial)
           {
             Serial.printlnf("TRANSMITTER : CONNECTED AT %d bits/s", 1000/bit_rates[rate_index]);
@@ -127,7 +144,7 @@ void transmitterThread(void){
         {
           Serial.println("TRANSMITTER : SENDING MESSAGE");
         }
-        String msg = "NNNNNNNNNNNNNNNNNNNNNNNNNNNB";
+        String msg = "ALLO";
         sendMessage(msg);
         delay((8 * 54 * bit_rates[rate_index]) + (8*msg.length() * bit_rates[rate_index]) + 1000); // Delay for each bits sent by frame + message + extra 1000 ms
         break;
@@ -140,13 +157,14 @@ void transmitterThread(void){
 volatile unsigned int previousBitReceived = 1;
 volatile unsigned int newBitReceived = 0;
 volatile int DataLength = 0;
+uint8_t* arr;
 
 template<class T>
 void readBytes(T* B,size_t amount){
   for(size_t i = 0; i < 8*amount;i++){
-    unsigned int newBitReceived_1 = digitalRead(LoopbackIn);
+    unsigned int newBitReceived_1 = digitalRead(PinIn);
     delay(inBaudRate);
-    unsigned int newBitReceived_2 = digitalRead(LoopbackIn);
+    unsigned int newBitReceived_2 = digitalRead(PinIn);
     delay(inBaudRate);
     if(newBitReceived_1 == 0 && newBitReceived_2 == 1){
       *B = *B | (0 << (((8*amount)-1)-i));
@@ -162,9 +180,9 @@ void receiverThread(void){
     {
       case IDLE:
       {
-        newBitReceived = digitalRead(LoopbackIn);
+        newBitReceived = digitalRead(PinIn);
         if(previousBitReceived == 1 && newBitReceived == 0){ // Someone is trying to communicate
-          if(!m_connected){ // Try to figure out the baud rate by indentifying the preambule
+          if(inBaudRate == -1){ // Try to figure out the baud rate by indentifying the preambule
             receiverThreadState = ThreadState::INITIATING_CONNECT;
           } else {
             receiverThreadState = ThreadState::RECEIVING_PREAMBULE; // Immideately jump to Preambule
@@ -179,14 +197,23 @@ void receiverThread(void){
       case INITIATING_CONNECT:
       {
         inBaudRate = bit_rates[rate_index];
-        uint32_t bytes_read = 0;
-        readBytes(&bytes_read, 4);
+        uint16_t bytes_read = 0;
+        readBytes(&bytes_read, 2);
         WITH_LOCK(Serial)
         {
           Serial.println("RECEIVER : INITIATING CONNECT");
         }
-        if (bytes_read == (uint32_t)(0x55555555)){
-          m_connected = true;
+        if (bytes_read == (uint16_t)(0x5555)){
+          digitalWrite(PinOut,0);
+          delay(inBaudRate*2);
+          digitalWrite(PinOut,1);
+        } else {
+          WITH_LOCK(Serial)
+          {
+            Serial.println("RECEIVER : FAILED CONNECT, SLEEPING 3sec");
+          }
+          delay(3000);
+          inBaudRate = -1;
         }
         receiverThreadState = ThreadState::IDLE;
         break;
@@ -230,7 +257,7 @@ void receiverThread(void){
       }
       case RECEIVING_DATA:
       { 
-        uint8_t* arr = new uint8_t[DataLength]{0};
+        arr = new uint8_t[DataLength]{0};
         for(int i = 0; i < DataLength;i++){
           readBytes(&arr[i],1);
         }
@@ -247,10 +274,13 @@ void receiverThread(void){
       {
         uint16_t CRCBits = 0;
         readBytes(&CRCBits,2);
+        uint16_t CRCCalculated = getCRC16(arr,DataLength);
         WITH_LOCK(Serial)
         {
-          Serial.printlnf("CRC : %X,  should be : %X",CRCBits,0xFFFF);
+          Serial.printlnf("CRC : %X,  should be : %X",CRCBits,CRCCalculated);
         }
+        delete[] arr;
+        arr = nullptr;
         receiverThreadState = ThreadState::RECEIVING_END;
         break;
       }
