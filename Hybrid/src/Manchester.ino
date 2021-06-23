@@ -6,12 +6,13 @@ SYSTEM_THREAD(ENABLED);
 // INITIATING_CONNECT : Attempting to figure out the baud rate
 // SENDING : Sending bits on the line
 // RECEIVING : Receiving bits on the line
-int bit_rates[3] = {10, 10, 100};  //Number represents the delay between each bits
+int bit_rates[3] = {1, 10, 100};  //Number represents the delay between each bits
 int rate_index = 0; //Index of previous table
 enum ThreadState{
   IDLE,INITIATING_CONNECT, WAITING_FOR_REPLY, CONNECTED,
   RECEIVING_PREAMBULE,RECEIVING_START,RECEIVING_HEADER,RECEIVING_DATA,RECEIVING_CRC,RECEIVING_END,
 };
+
 Thread* rThread;
 Thread* tThread;
 unsigned int PinIn = D4;
@@ -94,6 +95,7 @@ void loop() {
 }
 
 void transmitterThread(void){
+  int MessageCounter = 0;
   while(true){
     switch (transmitterThreadState)
     {
@@ -108,14 +110,17 @@ void transmitterThread(void){
         break;
       }
       case WAITING_FOR_REPLY:{
-        WITH_LOCK(Serial)
-        {
-          Serial.println("TRANSMITTER : WAITING FOR REPLY");
-        }
         bool connected = false;
-        uint8_t currentValue = digitalRead(PinIn);
-        for (int i = 0; i < 5000 && !connected; i++){
-          if(digitalRead(PinIn) != currentValue){
+        for (int i = 0; i < 500 && !connected; i++){
+          WITH_LOCK(Serial)
+          {
+            Serial.println("TRANSMITTER : WAITING ACK");
+          }
+          if(digitalRead(PinIn) == 0){
+            WITH_LOCK(Serial)
+            {
+              Serial.println("TRANSMITTER : RECEIVED ACK");
+            }
             connected = true;
           }
           delay(outBaudRate);
@@ -144,7 +149,7 @@ void transmitterThread(void){
         {
           Serial.println("TRANSMITTER : SENDING MESSAGE");
         }
-        String msg = "ALLO";
+        String msg = "Message#" + String(MessageCounter++);
         sendMessage(msg);
         delay((8 * 54 * bit_rates[rate_index]) + (8*msg.length() * bit_rates[rate_index]) + 1000); // Delay for each bits sent by frame + message + extra 1000 ms
         break;
@@ -197,16 +202,21 @@ void receiverThread(void){
       case INITIATING_CONNECT:
       {
         inBaudRate = bit_rates[rate_index];
-        uint16_t bytes_read = 0;
-        readBytes(&bytes_read, 2);
+        uint32_t bytes_read = 0;
+        readBytes(&bytes_read, 4);
         WITH_LOCK(Serial)
         {
           Serial.println("RECEIVER : INITIATING CONNECT");
         }
-        if (bytes_read == (uint16_t)(0x5555)){
+        if (bytes_read == (uint32_t)(0x55555555)){
+          WITH_LOCK(Serial)
+          {
+            Serial.println("RECEIVER : CONNECTED, SENDING ACK");
+          }
           digitalWrite(PinOut,0);
           delay(inBaudRate*2);
           digitalWrite(PinOut,1);
+          delay(inBaudRate);
         } else {
           WITH_LOCK(Serial)
           {
@@ -277,7 +287,15 @@ void receiverThread(void){
         uint16_t CRCCalculated = getCRC16(arr,DataLength);
         WITH_LOCK(Serial)
         {
-          Serial.printlnf("CRC : %X,  should be : %X",CRCBits,CRCCalculated);
+          if(CRCBits == CRCCalculated){
+            Serial.printf("\033[0;32m");
+            Serial.printlnf("CRC : %X,  should be : %X",CRCBits,CRCCalculated);
+            Serial.printf("\033[0m");
+          } else {
+            Serial.printf("\033[1;31m");
+            Serial.printlnf("CRC : %X,  should be : %X",CRCBits,CRCCalculated);
+            Serial.printf("\033[0m");
+          }
         }
         delete[] arr;
         arr = nullptr;
