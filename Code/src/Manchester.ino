@@ -15,6 +15,14 @@ enum ThreadState{
 
 Thread* rThread;
 Thread* tThread;
+uint32_t start_crc = 0;
+uint32_t end_crc = 0;
+uint32_t start_sendmessage = 0;
+uint32_t end_sendmessage = 0;
+uint32_t start_sendbytes = 0;
+uint32_t end_sendbytes = 0;
+uint32_t start_readmessage = 0;
+uint32_t end_readmessage = 0;
 unsigned int PinIn = D4;
 unsigned int PinOut = D5;
 int outBaudRate = bit_rates[rate_index]; // Symbol / s
@@ -24,19 +32,50 @@ volatile ThreadState receiverThreadState = ThreadState::IDLE;
 volatile ThreadState transmitterThreadState = ThreadState::INITIATING_CONNECT;
 
 uint16_t getCRC16(uint8_t* data_p, uint8_t length){
-    uint8_t x;
-    uint8_t crc = 0xFFFF;
+  end_crc = System.ticks();
+  WITH_LOCK(Serial)
+  {
+    Serial.println("GET_CRC");
+  }
+  uint32_t duration = (end_crc-start_crc)/System.ticksPerMicrosecond();
+  WITH_LOCK(Serial)
+  {
+    Serial.printlnf("Periode transitoire : %d us", duration);
+  }
+  start_crc = System.ticks();
+  uint8_t x;
+  uint8_t crc = 0xFFFF;
 
-    while (length--){
-        x = crc >> 8 ^ *data_p++;
-        x ^= x>>4;
-        crc = (crc << 8) ^ ((uint8_t)(x << 12)) ^ ((uint8_t)(x <<5)) ^ ((uint8_t)x);
-    }
-    return crc;
+  while (length--){
+    x = crc >> 8 ^ *data_p++;
+    x ^= x>>4;
+    crc = (crc << 8) ^ ((uint8_t)(x << 12)) ^ ((uint8_t)(x <<5)) ^ ((uint8_t)x);
+  }
+
+  end_crc = System.ticks();
+  duration = (end_crc-start_crc)/System.ticksPerMicrosecond();
+  WITH_LOCK(Serial)
+  {
+    Serial.printlnf("Temps execution : %d us", duration);
+  }
+  start_crc = System.ticks();
+  return crc;
 }
 
 template<class T>
 void sendBytes(T B, size_t amount) {
+  end_sendbytes = System.ticks();
+  WITH_LOCK(Serial)
+  {
+    Serial.println("SEND BYTES");
+  }
+  uint32_t duration = (end_sendbytes-start_sendbytes)/System.ticksPerMicrosecond();
+  WITH_LOCK(Serial)
+  {
+    Serial.printlnf("Periode transitoire : %d us", duration);
+  }
+  start_sendbytes = System.ticks();
+
   char bit = 0;
   for (size_t i = 0; i < 8 * amount; i++) {
     T bit = (B >> ((8*amount)-i-1)) & 1;
@@ -53,9 +92,29 @@ void sendBytes(T B, size_t amount) {
     }
     delay(outBaudRate);
   }
+
+  end_sendbytes = System.ticks();
+  duration = (end_sendbytes-start_sendbytes)/System.ticksPerMicrosecond();
+  WITH_LOCK(Serial)
+  {
+    Serial.printlnf("Temps execution : %d us", duration);
+  }
+  start_sendbytes = System.ticks();
 }
 
 void sendMessage(String s){
+  end_sendmessage = System.ticks();
+  WITH_LOCK(Serial)
+  {
+    Serial.println("SEND MESSAGE");
+  }
+  uint32_t duration = (end_sendmessage-start_sendmessage)/System.ticksPerMicrosecond();
+  WITH_LOCK(Serial)
+  {
+    Serial.printlnf("Periode transitoire : %d us", duration);
+  }
+  start_sendmessage = System.ticks();
+
   uint8_t* characters = new uint8_t[s.length()];
   for(int i = 0; i < s.length();i++){
     characters[i] = s.charAt(i);
@@ -77,6 +136,14 @@ void sendMessage(String s){
   sendBytes(CRC16,2);
   // Send End
   sendBytes((uint8_t)(0x7E),1);
+
+  end_sendmessage = System.ticks();
+  duration = (end_sendmessage-start_sendmessage)/System.ticksPerMicrosecond();
+  WITH_LOCK(Serial)
+  {
+    Serial.printlnf("Temps execution : %d us", duration);
+  }
+  start_sendmessage = System.ticks();
 }
 
 void setup() {
@@ -166,6 +233,18 @@ uint8_t* arr;
 
 template<class T>
 void readBytes(T* B,size_t amount){
+  end_readmessage = System.ticks();
+  WITH_LOCK(Serial)
+  {
+    Serial.println("SEND MESSAGE");
+  }
+  uint32_t duration = (end_readmessage-start_readmessage)/System.ticksPerMicrosecond();
+  WITH_LOCK(Serial)
+  {
+    Serial.printlnf("Periode transitoire : %d us", duration);
+  }
+  start_readmessage = System.ticks();
+
   for(size_t i = 0; i < 8*amount;i++){
     unsigned int newBitReceived_1 = digitalRead(PinIn);
     delay(inBaudRate);
@@ -177,6 +256,14 @@ void readBytes(T* B,size_t amount){
       *B = *B | (1 << (((8*amount)-1)-i));
     }
   }
+
+  end_readmessage = System.ticks();
+  duration = (end_readmessage-start_readmessage)/System.ticksPerMicrosecond();
+  WITH_LOCK(Serial)
+  {
+    Serial.printlnf("Temps execution : %d us", duration);
+  }
+  start_readmessage = System.ticks();
 }
 
 void receiverThread(void){
