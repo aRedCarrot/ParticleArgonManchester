@@ -1,0 +1,38 @@
+— L’état de développement de votre solution en faisant une démonstration
+  - Faire demo
+— Les techniques utilisées pour valider que votre solution est fonctionnelle
+  - Visuellement au terminal
+  - CRC
+  - RMA
+— La situation de votre solution par rapport aux objectifs
+  - Complete, parce que :
+    - Separation des layers(Manchester, Frame, Message)
+      - Les fonctions readBytes et sendBytes prennent des char et envoient sur la ligne de transmission des bits manchesters.
+      - Les MEF gerent la frame du message
+      - On utilise la fonction sendMessage pour envoyer une string au receveur.
+    - La construction de trame(Gerer pas les MEF)
+      - Construction de la trame avec preambule, start, headers, message, CRC, end
+    - L'envoie des messages
+      - Lecture des entetes de longueur de message
+      - Lecture mes bytes(char) envoyer
+    - Verification de l'integriter des messages avec le CRC
+    - Debit de transmission adaptif avec le recepteur(mini ACK pour signaler la comprehension)
+— Votre raisonnement pour arriver à vos choix de design (structure de l’application,
+tâches, mécanismes de communication et de synchronisation etc) ;
+  - Taches
+    - Un thread pour chaque taches
+      - Recepteur
+      - Transmetteur
+  - Structure
+    - Utilisation de MEF pour bien separer chaque section de la trame au recepteur
+    - Utilisation de MEF pour gerer le status de connexion du transmetteur et du recepteur
+    - Separation des "layers" pour plus facilement interfacer avec notre systeme. Example on peut simplement utiliser sendMessage et le traitement en decoule.
+  - Synchronisation
+    - Mecanisme de communication avec Manchester pour eviter d'avoir une clock separer
+    - Synchronisation avec les delais au lieu d'interruption pour plus facilement developper le systeme. Le fil d'execution est tres clair entre les deux fils.
+    - Synchronisation au debut du message similairement au communication Serial. On garde la ligne de transmission HIGH et on drop a LOW pour indiquer le debut au recepteur.
+    - Les taches sont separer entre les deux threads transmetteur et recepteur. Chancun gere independament de l'autre ca MEF.
+    - Limite par l'imperfection de l'horloge 
+— Les performances obtenues avec votre solution.
+  - 1000 bits/s, ceci semble etre raisonable pour avoir un nombre d'erreur minimale et une tres bonne vitesse. 
+    Considerant qu'on ne compte pas envoyer enormement de data (limite de 80 bytes)
