@@ -15,14 +15,12 @@ enum ThreadState{
 
 Thread* rThread;
 Thread* tThread;
-uint32_t start_crc = 0;
-uint32_t end_crc = 0;
 uint32_t start_sendmessage = 0;
 uint32_t end_sendmessage = 0;
-uint32_t start_sendbytes = 0;
-uint32_t end_sendbytes = 0;
 uint32_t start_readmessage = 0;
 uint32_t end_readmessage = 0;
+uint32_t old_start_sendMessage = 0;
+uint32_t old_start_readMessage = 0;
 unsigned int PinIn = D4;
 unsigned int PinOut = D5;
 int outBaudRate = bit_rates[rate_index]; // Symbol / s
@@ -32,17 +30,6 @@ volatile ThreadState receiverThreadState = ThreadState::IDLE;
 volatile ThreadState transmitterThreadState = ThreadState::INITIATING_CONNECT;
 
 uint16_t getCRC16(uint8_t* data_p, uint8_t length){
-  end_crc = System.ticks();
-  WITH_LOCK(Serial)
-  {
-    Serial.println("GET_CRC");
-  }
-  uint32_t duration = (end_crc-start_crc)/System.ticksPerMicrosecond();
-  WITH_LOCK(Serial)
-  {
-    Serial.printlnf("Periode transitoire : %d us", duration);
-  }
-  start_crc = System.ticks();
   uint8_t x;
   uint8_t crc = 0xFFFF;
 
@@ -51,31 +38,11 @@ uint16_t getCRC16(uint8_t* data_p, uint8_t length){
     x ^= x>>4;
     crc = (crc << 8) ^ ((uint8_t)(x << 12)) ^ ((uint8_t)(x <<5)) ^ ((uint8_t)x);
   }
-
-  end_crc = System.ticks();
-  duration = (end_crc-start_crc)/System.ticksPerMicrosecond();
-  WITH_LOCK(Serial)
-  {
-    Serial.printlnf("Temps execution : %d us", duration);
-  }
-  start_crc = System.ticks();
   return crc;
 }
 
 template<class T>
 void sendBytes(T B, size_t amount) {
-  end_sendbytes = System.ticks();
-  WITH_LOCK(Serial)
-  {
-    Serial.println("SEND BYTES");
-  }
-  uint32_t duration = (end_sendbytes-start_sendbytes)/System.ticksPerMicrosecond();
-  WITH_LOCK(Serial)
-  {
-    Serial.printlnf("Periode transitoire : %d us", duration);
-  }
-  start_sendbytes = System.ticks();
-
   char bit = 0;
   for (size_t i = 0; i < 8 * amount; i++) {
     T bit = (B >> ((8*amount)-i-1)) & 1;
@@ -92,14 +59,6 @@ void sendBytes(T B, size_t amount) {
     }
     delay(outBaudRate);
   }
-
-  end_sendbytes = System.ticks();
-  duration = (end_sendbytes-start_sendbytes)/System.ticksPerMicrosecond();
-  WITH_LOCK(Serial)
-  {
-    Serial.printlnf("Temps execution : %d us", duration);
-  }
-  start_sendbytes = System.ticks();
 }
 
 void sendMessage(String s){
@@ -108,7 +67,8 @@ void sendMessage(String s){
   {
     Serial.println("SEND MESSAGE");
   }
-  uint32_t duration = (end_sendmessage-start_sendmessage)/System.ticksPerMicrosecond();
+  uint32_t duration = (end_sendmessage-old_start_sendMessage)/System.ticksPerMicrosecond();
+  old_start_sendMessage = System.ticks();
   WITH_LOCK(Serial)
   {
     Serial.printlnf("Periode transitoire : %d us", duration);
@@ -143,7 +103,6 @@ void sendMessage(String s){
   {
     Serial.printlnf("Temps execution : %d us", duration);
   }
-  start_sendmessage = System.ticks();
 }
 
 void setup() {
@@ -309,7 +268,6 @@ void receiverThread(void){
           {
             Serial.println("RECEIVER : FAILED CONNECT, SLEEPING 3sec");
           }
-          delay(3000);
           inBaudRate = -1;
         }
         receiverThreadState = ThreadState::IDLE;
